@@ -1,11 +1,11 @@
 package dataencryption
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-
-	"crypto/sha256"
+	"io/ioutil"
 
 	"github.com/minio/sio"
 	"golang.org/x/crypto/hkdf"
@@ -13,18 +13,37 @@ import (
 	"github.com/gardener/etcd-backup-restore/pkg/types"
 )
 
-const dataEncryptionKeyEnvName = "DATA_ENCRYPTION_KEY"
-
-var dataEncryptionKey = []byte(os.Getenv(dataEncryptionKeyEnvName))
-
 type decoratedSnapStore struct {
-	snapstore types.SnapStore
+	snapstore            types.SnapStore
+	encryptionConfigPath string
 }
 
-func (r *decoratedSnapStore) deriveEncryptionKey(snapshot types.Snapshot) ([32]byte, error) {
+func (r *decoratedSnapStore) readEncryptionMasterKey() string {
+	if r.encryptionConfigPath == "" {
+		return ""
+	}
+	content, err := ioutil.ReadFile(r.encryptionConfigPath)
+	if err != nil {
+		panic(fmt.Errorf("readEncryptionMasterKey: failed to read %q as %v", r.encryptionConfigPath, err))
+	}
+
+	cfg := types.SnapstoreEncryptionConfig{}
+	err = json.Unmarshal(content, &cfg)
+	if err != nil {
+		panic(fmt.Errorf("readEncryptionMasterKey: failed to unmarshal %q as %v", r.encryptionConfigPath, err))
+	}
+
+	if !cfg.Enabled {
+		return ""
+	}
+
+	return cfg.Key
+}
+
+func (r *decoratedSnapStore) deriveEncryptionKey(masterKey string, snapshot types.Snapshot) ([32]byte, error) {
 	var key [32]byte
 	nonce := snapshot.SnapName // use snapName as the nonce
-	kdf := hkdf.New(sha256.New, dataEncryptionKey, []byte(nonce), nil)
+	kdf := hkdf.New(sha256.New, []byte(masterKey), []byte(nonce), nil)
 	if _, err := io.ReadFull(kdf, key[:]); err != nil {
 		return [32]byte{}, err
 	}
@@ -32,7 +51,12 @@ func (r *decoratedSnapStore) deriveEncryptionKey(snapshot types.Snapshot) ([32]b
 }
 
 func (r *decoratedSnapStore) Fetch(snapshot types.Snapshot) (io.ReadCloser, error) {
-	key, err := r.deriveEncryptionKey(snapshot)
+	masterKey := r.readEncryptionMasterKey()
+	if len(masterKey) == 0 {
+		return r.snapstore.Fetch(snapshot)
+	}
+
+	key, err := r.deriveEncryptionKey(masterKey, snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("deriveEncryptionKey failed as %v", err)
 	}
@@ -51,7 +75,12 @@ func (r *decoratedSnapStore) List() (types.SnapList, error) {
 }
 
 func (r *decoratedSnapStore) Save(snapshot types.Snapshot, originalUnencryptedDataReader io.ReadCloser) error {
-	key, err := r.deriveEncryptionKey(snapshot)
+	masterKey := r.readEncryptionMasterKey()
+	if len(masterKey) == 0 {
+		return r.snapstore.Save(snapshot, originalUnencryptedDataReader)
+	}
+
+	key, err := r.deriveEncryptionKey(masterKey, snapshot)
 	if err != nil {
 		return fmt.Errorf("deriveEncryptionKey failed as %v", err)
 	}
@@ -68,10 +97,6 @@ func (r *decoratedSnapStore) Delete(snapshot types.Snapshot) error {
 	return r.snapstore.Delete(snapshot)
 }
 
-func DecorateSnapStore(snapstore types.SnapStore) types.SnapStore {
-	if len(dataEncryptionKey) == 0 {
-		return snapstore
-	}
-
-	return &decoratedSnapStore{snapstore: snapstore}
+func DecorateSnapStore(snapstore types.SnapStore, encryptionConfigPath string) types.SnapStore {
+	return &decoratedSnapStore{snapstore: snapstore, encryptionConfigPath: encryptionConfigPath}
 }

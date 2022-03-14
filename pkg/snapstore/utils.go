@@ -104,7 +104,7 @@ func GetSnapstore(config *brtypes.SnapstoreConfig) (brtypes.SnapStore, error) {
 		return snapstore, err
 	}
 
-	return dataencryption.DecorateSnapStore(snapstore), err
+	return dataencryption.DecorateSnapStore(snapstore, config.EncryptionConfigPath), err
 }
 
 // GetEnvVarOrError returns the value of specified environment variable or terminates if it's not defined.
