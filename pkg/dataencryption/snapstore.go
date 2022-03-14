@@ -62,7 +62,10 @@ func (r *decoratedSnapStore) Fetch(snapshot types.Snapshot) (io.ReadCloser, erro
 	}
 
 	originalEncryptedDataReader, err := r.snapstore.Fetch(snapshot)
-	decryptedDataReader, err := sio.DecryptReader(originalEncryptedDataReader, sio.Config{Key: key[:]})
+	decryptedDataReader, err := sio.DecryptReader(originalEncryptedDataReader, sio.Config{
+		Key:          key[:],
+		CipherSuites: []byte{sio.AES_256_GCM},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sio.DecryptReader failed as %v", err)
 	}
@@ -85,7 +88,10 @@ func (r *decoratedSnapStore) Save(snapshot types.Snapshot, originalUnencryptedDa
 		return fmt.Errorf("deriveEncryptionKey failed as %v", err)
 	}
 
-	encryptedDataReader, err := sio.EncryptReader(originalUnencryptedDataReader, sio.Config{Key: key[:]})
+	encryptedDataReader, err := sio.EncryptReader(originalUnencryptedDataReader, sio.Config{
+		Key:          key[:],
+		CipherSuites: []byte{sio.AES_256_GCM},
+	})
 	if err != nil {
 		return fmt.Errorf("sio.EncryptReader failed as %v", err)
 	}
